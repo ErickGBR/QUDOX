@@ -1,0 +1,39 @@
+# ============================================================================
+# QUDOX — Imagen del backend (Express + TypeScript + Prisma + SQL Server)
+# Multi-stage: deps -> build -> runtime esbelto.
+# El runtime solo lleva `dist/` + dependencias de producción y es capaz de
+# arrancar con `node dist/server.js` (ver `backend/package.json#main`).
+# ============================================================================
+
+# --- Etapa 1: dependencias (capa cacheable; solo se invalida si cambia el lock)
+FROM node:22-bookworm-slim AS deps
+WORKDIR /app/backend
+# Se copian SOLO los manifiestos para que `npm ci` quede en su propia capa.
+COPY backend/package.json backend/package-lock.json ./
+# `npm ci` (no `npm install`): instalación determinista desde el lock, apta CI.
+RUN npm ci
+
+# --- Etapa 2: compilación (tsc + prisma generate)
+FROM node:22-bookworm-slim AS build
+WORKDIR /app/backend
+# Se reutilizan las dependencias ya instaladas en la etapa `deps`.
+COPY --from=deps /app/backend/node_modules ./node_modules
+# Se copia el código del backend (el .dockerignore ya excluye node_modules/dist).
+COPY backend/ ./
+# Genera el cliente de Prisma y compila TypeScript a `dist/` (`tsc -p tsconfig.json`).
+RUN npx prisma generate && npm run build
+
+# --- Etapa 3: runtime esbelto (sin devDependencies ni código fuente TS)
+FROM node:22-bookworm-slim AS runtime
+ENV NODE_ENV=production
+WORKDIR /app/backend
+# Solo dependencias de producción (@prisma/client, express, cors, dotenv...).
+COPY backend/package.json backend/package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+# Compilado JS + cliente Prisma generado en la etapa `build` + schema (referencia).
+COPY --from=build /app/backend/dist ./dist
+COPY --from=build /app/backend/node_modules/.prisma ./node_modules/.prisma
+COPY backend/prisma ./prisma
+EXPOSE 3000
+# Sin `tty`/`stdin_open`: arranque 100% no interactivo (apto para CI).
+CMD ["node", "dist/server.js"]
