@@ -1,0 +1,96 @@
+# ============================================================================
+# QUDOX — Stack local con un solo comando: `docker compose up --build`
+# Servicios: `db` (SQL Server) + `init-db` (one-shot) + `backend` + `frontend`.
+# Cadena de arranque: db (healthy) -> init-db (éxito) -> backend (healthy) -> frontend.
+# Sin `tty`/`stdin_open` en ningún servicio: arranque 100% no interactivo (apto CI).
+# ============================================================================
+name: qudox
+
+services:
+  # --- SQL Server 2022 (único contenedor de datos) ---
+  db:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: Y
+      # Clave compleja (la política de SQL Server rechaza claves débiles).
+      # Se puede sobrescribir sin editar el archivo: `MSSQL_SA_PASSWORD=... docker compose up`.
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:-QuDox!Passw0rd2026}
+      MSSQL_PID: Developer
+      MSSQL_TCP_PORT: 1433
+    # Solo localhost: el puerto NO se expone a la red local.
+    ports:
+      - "127.0.0.1:1433:1433"
+    volumes:
+      - mssql-data:/var/opt/mssql
+    # `sqlcmd` vive en /opt/mssql-tools18/bin en la imagen 2022 (`-C` = confía en el cert autofirmado).
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$${MSSQL_SA_PASSWORD}\" -Q \"SELECT 1\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # --- Inicialización one-shot (la imagen mssql NO tiene /docker-entrypoint-initdb.d) ---
+  # Reusa la MISMA imagen de `db` (sin pull extra): espera a `db` saludable y
+  # aplica `database/payroll.sql` (+ `seed.sql` si existe) sobre la base `Qudox`.
+  init-db:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:-QuDox!Passw0rd2026}
+      DB_HOST: db
+      DB_USER: sa
+      DB_NAME: Qudox
+    volumes:
+      - ./database:/init-db:ro
+      - ./docker/init-db.sh:/docker-init/init-db.sh:ro
+    entrypoint: ["/bin/bash", "/docker-init/init-db.sh"]
+    restart: "no"
+
+  # --- API Express + Prisma (no arranca hasta que `db` está sana Y `init-db` terminó) ---
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    depends_on:
+      db:
+        condition: service_healthy
+      init-db:
+        condition: service_completed_successfully
+    environment:
+      # `db` = hostname interno de compose; `database=Qudox` = la creada por `init-db`.
+      DATABASE_URL: "sqlserver://db:1433;database=Qudox;user=sa;password=${MSSQL_SA_PASSWORD:-QuDox!Passw0rd2026};encrypt=true;trustServerCertificate=true"
+      PORT: 3000
+    ports:
+      - "127.0.0.1:3000:3000"
+    healthcheck:
+      # Node 22 trae `fetch` global: sin curl/wget extra en la imagen slim.
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # --- Frontend (nginx: sirve `dist/` y proxyea `/api` al backend por mismo origen) ---
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        VITE_API_URL: ${VITE_API_URL:-/}
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8080:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  mssql-data:
