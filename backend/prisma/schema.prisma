@@ -1,0 +1,91 @@
+// QUDOX — Prueba Técnica Full Stack Developer
+// Prisma Schema — backend/prisma/schema.prisma
+// Fecha: 2026-10-05
+//
+// IMPORTANTE: Este schema DEBE coincidir EXACTAMENTE con database/payroll.sql
+// Cualquier discrepancia es un hallazgo de revisión.
+//
+// SUPUESTOS APLICADOS (consistentes con payroll.sql y el contrato):
+// 1. IDs = BigInt (IDENTITY en SQL Server) — NO String/UUID.
+//    Justificación: payroll system en SQL Server → BigInt IDENTITY es estándar,
+//    rendimiento superior, claves clusterizadas secuenciales, sin fragmentación.
+//    El modelo DEBE usar @default(autoincrement()) y el generador Prisma compatible.
+// 2. Periodo = String @db.Char(7) — formato 'YYYY-MM' fijo.
+// 3. Monto = Decimal @db.Decimal(18,2) — NUNCA Float/Double (pierde precisión financiera).
+//    JS numbers = IEEE 754 double → 0.1 + 0.2 = 0.30000000000000004.
+//    Prisma Decimal (biblioteca decimal.js) mantiene precisión exacta.
+// 4. estado y tipo = String (NO enum Prisma) — Prisma no soporta enums nativos en SQL Server.
+//    Dominio validado por CHECK constraints en DDL + express-validator en API.
+// 5. CORRECCIÓN: PlanillaDetalle NO tiene CentroCostoId.
+//    El centro de costo se alcanza vía empleado.centroCostoId (relación traverse).
+//    NO denormalizar — segunda fuente de verdad que puede divergir.
+// 6. Campos extra en Planilla (no en diagrama original, SÍ en el contrato):
+//    - referenciaSap: trazabilidad del envío a SAP (diagnóstico)
+//    - enviadaSapEn: timestamp del envío (diagnóstico incidente)
+// 7. Sin @@unique en (planillaId, empleadoId, concepto) — la consulta 3 EXISTE para detectar.
+// 8. Índices declarados SOLO donde las 4 consultas los justifican (ver payroll.sql).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlserver"
+  url      = env("DATABASE_URL")
+}
+
+model Empleado {
+  empleadoId     BigInt   @id @default(autoincrement()) @map("EmpleadoId")
+  nombre         String   @map("Nombre")
+  centroCostoId  BigInt   @map("CentroCostoId")
+  activo         Boolean  @default(true) @map("Activo")
+
+  centroCosto    CentroCosto      @relation(fields: [centroCostoId], references: [centroCostoId], map: "FK_Empleados_CentroCosto")
+  detalles       PlanillaDetalle[]
+
+  @@index([centroCostoId, activo], map: "IX_Empleados_CentroCostoId_Activo")
+  @@map("Empleados")
+}
+
+model CentroCosto {
+  centroCostoId  BigInt   @id @default(autoincrement()) @map("CentroCostoId")
+  nombre         String   @map("Nombre")
+
+  empleados      Empleado[]
+
+  // NO existe campo 'detalles PlanillaDetalle[]': relación unilateral inválida en Prisma.
+  // El centro de costo de un movimiento se alcanza vía empleado.centroCostoId (traverse).
+  // PlanillaDetalle NO tiene CentroCostoId (corrección).
+
+  @@map("CentrosCosto")
+}
+
+model Planilla {
+  planillaId     BigInt     @id @default(autoincrement()) @map("PlanillaId")
+  periodo        String     @db.Char(7) @map("Periodo")           // 'YYYY-MM'
+  estado         String     @default("Borrador") @map("Estado")   // Borrador | Aprobada | EnviadaSAP
+  referenciaSap  String?    @map("ReferenciaSap")                 // NUEVO: trazabilidad SAP
+  enviadaSapEn   DateTime?  @map("EnviadaSapEn")                 // NUEVO: diagnóstico incidente
+  detalles       PlanillaDetalle[]
+
+  @@index([periodo, estado], map: "IX_Planillas_Periodo_Estado")
+  @@map("Planillas")
+}
+
+model PlanillaDetalle {
+  detalleId      BigInt     @id @default(autoincrement()) @map("DetalleId")
+  planillaId     BigInt     @map("PlanillaId")
+  empleadoId     BigInt     @map("EmpleadoId")
+  concepto       String     @map("Concepto")
+  monto          Decimal    @db.Decimal(18, 2) @map("Monto")
+  tipo           String     @db.Char(1) @map("Tipo")           // 'D' | 'C'
+
+  planilla       Planilla   @relation(fields: [planillaId], references: [planillaId], map: "FK_PlanillaDetalle_Planilla")
+  empleado       Empleado   @relation(fields: [empleadoId], references: [empleadoId], map: "FK_PlanillaDetalle_Empleado")
+
+  // NO @@unique([planillaId, empleadoId, concepto]) — ver supuesto #7
+  @@index([planillaId], map: "IX_PlanillaDetalle_PlanillaId")
+  @@index([planillaId, tipo], map: "IX_PlanillaDetalle_PlanillaId_Tipo")
+  @@index([planillaId, empleadoId, concepto], map: "IX_PlanillaDetalle_PlanillaId_EmpleadoId_Concepto")
+  @@map("PlanillaDetalle")
+}
