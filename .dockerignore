@@ -1,0 +1,22 @@
+# ============================================================================
+# QUDOX — Contexto Docker (raíz; cubre backend y frontend a la vez)
+# El contexto de build es la RAÍZ del repo, así que los patrones aplican a ambas apps.
+# ============================================================================
+
+# Dependencias (se reinstalan con `npm ci` dentro de cada etapa)
+node_modules
+**/node_modules
+
+# Compilados (se regeneran con `npm run build`)
+dist
+**/dist
+
+# Repositorios y entorno local (secretos: nunca entran al contexto)
+.git
+.env
+.env.local
+
+# Ruido: logs, docs y archivos de sistema no aportan al build
+*.log
+*.md
+.DS_Store

@@ -1,0 +1,39 @@
+# ============================================================
+# QUDOX — Reglas de ignorados para un monorepo Node
+# ============================================================
+
+# --- Dependencias: nunca se versionan, se reinstalan ---
+node_modules/
+
+# --- Salidas de compilación del backend y del frontend ---
+dist/
+build/
+
+# --- Variables de entorno reales: jamás se suben ---
+# El archivo `.env` contiene secretos locales y queda fuera.
+.env
+# El archivo `.env.example` es la plantilla pública y SÍ
+# debe quedar bajo seguimiento: esta excepción lo garantiza.
+!.env.example
+
+# --- Archivos de registro ---
+logs/
+*.log
+npm-debug.log*
+
+# --- Cachés y temporales de herramientas ---
+.cache/
+.playwright-mcp/
+*.tsbuildinfo
+
+# --- Basura de editores ---
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+
+# --- Archivos del sistema operativo ---
+.DS_Store
+Thumbs.db
