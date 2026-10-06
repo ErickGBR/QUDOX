@@ -1,0 +1,14 @@
+# Dependencias (se regeneran con `npm install`)
+node_modules/
+
+# Compilacion de TypeScript
+dist/
+
+# Variables de entorno reales (la plantilla .env.example SI se versiona)
+.env
+.env.local
+
+# Registros y archivos de sistema
+*.log
+npm-debug.log*
+.DS_Store
